@@ -1,7 +1,5 @@
-# Chatbot with TinyLlama
+# Chatbot with Llama 3
 
-Prototype of a chatbot using Ollama, Langchain, FastAPI and Streamlit
+Prototype of a chatbot using Huggingface, FastAPI and Streamlit
 
-- To try out a lightweight model
-- Using Langchain's ConversationBufferMemory for prototype first. Can implement database to store conversation in future.
-- Will scale chatbot and implement RAG in future
+- Download model and inference API
