@@ -33,9 +33,7 @@ async def lifespan(app: FastAPI):
     RuntimeError: Raised if the `model_path` is not set in the configuration.
     """
     global model
-    # with open("conf/base/model.yaml") as f:
-    #     conf = yaml.safe_load(f)
-    model_path = conf["model_path"]
+    model_path = conf["save_model_path"]
     if model_path is None:
         raise RuntimeError("model_path environment variable not set")
     model = Model(model_path)
