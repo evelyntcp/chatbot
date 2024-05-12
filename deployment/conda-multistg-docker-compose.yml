@@ -1,0 +1,26 @@
+services:
+  app:
+    image: multistage:latest
+    container_name: chatbot
+    restart: always
+    build:
+      context: ../
+      dockerfile: deployment/condamultistage.Dockerfile
+    ports:
+    - "8000:8000"
+    - "8501:8501"
+    env_file:
+    - path: ../.env
+      required: true
+    # platform: linux/amd64
+    # command: ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port 8000 & streamlit run streamlit_chat.py --server.port 8501"]
+    # command: nvidia-smi
+    entrypoint: /bin/bash -c
+    command: python main.py"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
