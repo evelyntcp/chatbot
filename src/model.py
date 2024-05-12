@@ -6,22 +6,23 @@ from typing import List, Union
 import fastapi
 import torch
 import yaml
-from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+
+# from dotenv import load_dotenv
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 ### Initialization ###
 
 logger = logging.getLogger(__name__)
 
-router = fastapi.APIRouter()
+router = APIRouter()
 
-load_dotenv(".env")
+model = None
 
-## Config variables ###
-with open("conf/base/model.yaml") as f:
-    global conf  # in colab i didnt have this
-    conf = yaml.safe_load(f)
+# load_dotenv(".env")
+
+torch_device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 ### Model Class ###
@@ -36,18 +37,19 @@ class Model:
         generate_response(prompt: str, max_length: int, num_return_sequences: int): Generates a response to a given prompt.
     """
 
-    def __init__(self, model_path: str) -> None:
+    def __init__(self, model_id: str, model_path: str) -> None:
         try:
             if not os.path.isdir(model_path):
                 logger.debug(
-                    "model_path does not exist. Downloading of model will begin."
+                    "Model path does not exist. Downloading of model will begin."
                 )
-                self.tokenizer, self.model = download_hf_model()
+                self.tokenizer, self.model = download_hf_model(model_id, model_path)
                 logger.info("Model and tokenizer successfully downloaded.")
             else:
                 self.tokenizer = AutoTokenizer.from_pretrained(model_path)
                 self.model = AutoModelForCausalLM.from_pretrained(model_path)
                 logger.info("Model and tokenizer loaded.")
+
         except Exception as e:
             logger.error(
                 f"An unexpected error occurred while loading the model from '{model_path}'. Error: {e}"
@@ -57,16 +59,19 @@ class Model:
     def generate_response(
         self,
         prompt: str,
+        max_length: int = 500,
         temperature: float = 0.1,
         top_k: int = 50,
         top_p: float = 0.9,
         num_return_sequences: int = 1,
+        early_stopping: bool = True,
     ) -> Union[str, List[str]]:
         """
         Generates a response to a given prompt using the model.
 
         Args:
             prompt (str): The user's input to which the model will generate a response.
+            max_length (int): The maximum length of the generated text. Default is 250.
             temperature (float): Controls the randomness in the response generation. Lower values
                 make the responses more deterministic. Default is 0.1.
             top_k (int): Limits the number of highest probability vocabulary tokens considered for
@@ -75,6 +80,9 @@ class Model:
                 greater than this value. Default is 0.9.
             num_return_sequences (int): The number of response sequences to generate
                 from the given prompt. Default is 1.
+            early_stopping (bool): Whether or not to stop generating once `early_stopping`
+                criteria are met. If set to False, the generator will keep generating until it reaches
+                `max_length`. Default is True.
 
         Returns:
             Union[str, List[str]]: A single response string if 'num_return_sequences' is 1,
@@ -84,26 +92,20 @@ class Model:
 
         start_time = time.time()
 
-        # system_prompt = conf["system_prompt"]
-        # full_prompt = f"[system]: {system_prompt}\n[user]: {prompt}"
-
-        # input_ids = self.tokenizer.encode(full_prompt, return_tensors="pt")
-        # prompt = self.tokenizer.decode(input_ids[0].tolist())
-
         # input_ids = self.tokenizer.apply_chat_template(
         #     full_prompt, tokenize=True, add_generation_prompt=True, return_tensors="pt"
         # )
-        # print(self.tokenizer.decode(input_ids[0]))
 
-        input_ids = self.tokenizer.encode(prompt, return_tensors="pt")
+        input_ids = self.tokenizer.encode(prompt, return_tensors="pt").to(torch_device)
         output = self.model.generate(
             input_ids,
-            max_length=conf["max_length"],
+            max_length=max_length,
             temperature=temperature,
             top_k=top_k,
             top_p=top_p,
             num_return_sequences=num_return_sequences,
-            early_stopping=conf["early_stopping"],
+            early_stopping=early_stopping,
+            pad_token_id=self.tokenizer.eos_token_id,
         )
 
         responses = [
@@ -119,7 +121,7 @@ class Model:
 
 
 ### Functions ###
-def download_hf_model() -> tuple:
+def download_hf_model(model_id, save_model_path) -> tuple:
     """Downloads and saves the model and tokenizer based on the configuration files.
 
     The configuration should specify `HF_TOKEN` and `model_id`.
@@ -132,18 +134,10 @@ def download_hf_model() -> tuple:
     """
     tokenizer = None
     model = None
-
-    # with open("conf/secrets.yaml") as secrets_file:
-    #     secrets = yaml.safe_load(secrets_file)
-    #     hf_token = secrets.get("HF_TOKEN")
     hf_token = os.getenv("HF_TOKEN")
-    with open("conf/base/model.yaml") as model_file:
-        conf = yaml.safe_load(model_file)
-        model_id = conf["model_id"]
+
     if model_id is None:
         raise ValueError("No `model_id` provided.")
-
-    save_model_path = conf["save_model_path"]
 
     if not os.path.exists(save_model_path):
         os.makedirs(save_model_path, exist_ok=True)
@@ -152,10 +146,9 @@ def download_hf_model() -> tuple:
             model_id,
             load_in_4bit=True,
             device_map="auto",
-            torch_dtype=torch.bfloat16,
             cache_dir="models",
             token=hf_token,
-            # bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_compute_dtype=torch.float16,
             # bnb_4bit_quant_type="nf4",
             # bnb_4bit_use_double_quant=True
         )
@@ -164,3 +157,56 @@ def download_hf_model() -> tuple:
         model.save_pretrained(save_model_path)
         tokenizer.save_pretrained(save_model_path)
     return tokenizer, model
+
+
+### APIs ###
+class GenerationRequest(BaseModel):
+    """Request body for the /generate API endpoint"""
+
+    prompt: str
+    max_length: int = 250
+    temperature: float = 0.1
+    max_length: int = 250
+    top_k: int = 50
+    top_p: float = 0.9
+    num_return_sequences: int = 1
+    early_stopping: bool = True
+
+
+@router.post("/response/")
+async def response(request_body: GenerationRequest, request: Request) -> dict:
+    """
+    Process the generation request and return the response.
+
+    Args:
+    request (GenerationRequest): The request object containing the prompt,
+    max length, and number of return sequences.
+
+    Returns:
+    dict: A dictionary containing the generated response.
+
+    Raises:
+    HTTPException: Raised if the prompt is empty.
+    """
+    if request_body.prompt:
+        system_prompt = request.app.conf["system_prompt"]
+        prompt_template = request.app.conf["prompt_template"]
+        user_input = request_body.prompt
+
+        try:
+            full_prompt = prompt_template.format(system=system_prompt, user=user_input)
+        except:
+            full_prompt = user_input
+
+        response = request.app.model.generate_response(
+            full_prompt,
+            request_body.max_length,
+            request_body.temperature,
+            request_body.top_k,
+            request_body.top_p,
+            request_body.num_return_sequences,
+            request_body.early_stopping,
+        )
+        return {"response": response}
+    else:
+        raise HTTPException(status_code=400, detail="Prompt cannot be empty.")

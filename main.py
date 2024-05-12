@@ -1,4 +1,5 @@
 ### Import libraries ###
+import gc
 import logging
 import os
 import subprocess
@@ -11,12 +12,13 @@ import fastapi
 # Consider next time if need to add __init__.py into src
 import src.utils as utils
 import streamlit as st
+import torch
 import uvicorn
 import yaml
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from src.model import Model
+from src import model
 
 # Libraries needed for colab
 try:
@@ -26,11 +28,6 @@ try:
 except:
     pass
 
-### Initialization ###
-# with open("conf/base/model.yaml") as f:
-#     global conf
-#     conf = yaml.safe_load(f)
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -38,27 +35,35 @@ async def lifespan(app: FastAPI):
     Asynchronous context manager for application lifespan. Initializes the model
     upon application startup and cleans up resources upon shutdown.
 
+    Upon startup, it reads the model configuration from 'conf/base/model.yaml', initializes
+    the specified machine learning model, and assigns this model to `app.model` for global access.
+
     Args:
     app (FastAPI): The FastAPI application instance.
 
     Raises:
     RuntimeError: Raised if the `model_path` is not set in the configuration.
     """
-    global model
-    global conf
     with open("conf/base/model.yaml") as f:
-        conf = yaml.safe_load(f)
+        app.conf = yaml.safe_load(f)
         logger.info("Loaded config.")
-    model_path = conf["save_model_path"]
+    model_path = app.conf["save_model_path"]
+    model_id = app.conf["model_id"]
     if model_path is None:
-        raise RuntimeError("model_path environment variable not set")
-    model = Model(model_path)
+        raise RuntimeError("Model path not set.")
+    app.model = model.Model(model_id, model_path)
     yield
+    del app.model
+    os.rmdir(model_path)
+    gc.collect()
+    torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats()
 
 
 app = FastAPI(title="Chatbot", lifespan=lifespan)
 
 ORIGINS = ["*"]
+# ORIGINS = ["http://localhost:8501"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -68,50 +73,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(model.router)
+
 logger = logging.getLogger(__name__)
 logger.info("Setting up logging configuration.")
 utils.setup_logging(logging_config_path="conf/base/logging.yaml")
 
 
 ### APIs ###
-class GenerationRequest(BaseModel):
-    """Request body for the /generate API endpoint"""
-
-    prompt: str
-    temperature: float = 0.1
-    max_length: int = 250
-    top_k: int = 50
-    top_p: float = 0.9
-    num_return_sequences: int = 1
-
-
-@app.post("/response/")
-async def response(request: GenerationRequest) -> dict:
-    """
-    Process the generation request and return the response.
-
-    Args:
-    request (GenerationRequest): The request object containing the prompt,
-    max length, and number of return sequences.
-
-    Returns:
-    dict: A dictionary containing the generated response.
-
-    Raises:
-    HTTPException: Raised if the prompt is empty.
-    """
-    if request.prompt:
-        response = model.generate_response(
-            request.prompt,
-            request.temperature,
-            request.top_k,
-            request.top_p,
-        )
-        return {"response": response}
-    else:
-        raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
-
-
 class HealthCheck(BaseModel):
     """Model for the health check response."""
 
@@ -132,23 +101,9 @@ def get_health() -> HealthCheck:
 
 
 def run_fastapi():
+    """Runs FastAPI app on host 0.0.0.0 and port 8000."""
     uvicorn.run(app, host="0.0.0.0", port=8000)
 
 
 if __name__ == "__main__":
-    # to run on colab
-    # os.environ["NGROK"] = userdata.get("NGROK")
-    # conf.get_default().auth_token = os.environ["NGROK"]
-    # ngrok.kill()
-    # ngrok_tunnel = ngrok.connect(8000)
-    # print("Public URL:", ngrok_tunnel.public_url)
-
-    # to run on colab multithreading
-    # threading.Thread(target=run_fastapi, daemon=True).start()
-    # os.system("streamlit run src/streamlit_chat.py")
-
-    # nest_asyncio.apply()
-    # uvicorn.run(app, port=8000)
-
-    # run from local PC with GPU
     run_fastapi()
