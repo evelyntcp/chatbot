@@ -1,0 +1,24 @@
+services:
+  app:
+    image: fullapp:latest
+    container_name: chatbot-app
+    restart: always
+    build:
+      context: ../
+      dockerfile: deployment/app.Dockerfile
+    ports:
+    - "8000:8000"
+    - "8501:8501"
+    env_file:
+    - path: ../.env
+      required: true
+    # platform: linux/amd64
+    # entrypoint: /bin/bash -c
+    # command: python3 main.py
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
