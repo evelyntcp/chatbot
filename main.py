@@ -18,7 +18,7 @@ import yaml
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from src import model
+from src import model, rag
 
 # Libraries needed for colab
 try:
@@ -49,18 +49,20 @@ async def lifespan(app: FastAPI):
         logger.info("Loaded config.")
     model_path = app.conf["save_model_path"]
     model_id = app.conf["model_id"]
+
     if model_path is None:
         raise RuntimeError("Model path not set.")
     app.model = model.Model(model_id, model_path)
     yield
-    del app.model
-    os.rmdir(model_path)
-    gc.collect()
-    torch.cuda.empty_cache()
-    torch.cuda.reset_peak_memory_stats()
+    # del app.model
+    # # os.rmdir(model_path)
+    # gc.collect()
+    # torch.cuda.empty_cache()
+    # torch.cuda.reset_peak_memory_stats()
 
 
 app = FastAPI(title="Chatbot", lifespan=lifespan)
+# app = FastAPI(title="Chatbot")
 
 ORIGINS = ["*"]
 # ORIGINS = ["http://localhost:8501"]
@@ -74,6 +76,7 @@ app.add_middleware(
 )
 
 app.include_router(model.router)
+app.include_router(rag.router)
 
 logger = logging.getLogger(__name__)
 logger.info("Setting up logging configuration.")

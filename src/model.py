@@ -6,11 +6,21 @@ from typing import List, Union
 import fastapi
 import torch
 import yaml
+from dotenv import load_dotenv
 
 # from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException, Request
+from langchain.schema import BaseOutputParser
+from langchain_community.llms import HuggingFacePipeline
 from pydantic import BaseModel
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    StoppingCriteria,
+    StoppingCriteriaList,
+    TextIteratorStreamer,
+    pipeline,
+)
 
 ### Initialization ###
 
@@ -20,9 +30,13 @@ router = APIRouter()
 
 model = None
 
-# load_dotenv(".env")
+load_dotenv(".env")
 
-torch_device = "cuda" if torch.cuda.is_available() else "cpu"
+if torch.cuda.is_available():
+    torch_device = "cuda"
+else:
+    torch_device = "cpu"
+device_map = {"": torch_device}
 
 
 ### Model Class ###
@@ -49,17 +63,51 @@ class Model:
                 self.tokenizer = AutoTokenizer.from_pretrained(model_path)
                 self.model = AutoModelForCausalLM.from_pretrained(model_path)
                 logger.info("Model and tokenizer loaded.")
-
+            # self.model = self.model.to(torch_device)
         except Exception as e:
             logger.error(
                 f"An unexpected error occurred while loading the model from '{model_path}'. Error: {e}"
             )
             raise ValueError("An unexpected error occurred.") from e
 
+        self.streamer = TextIteratorStreamer(
+            self.tokenizer, skip_prompt=False, skip_special_tokens=True
+        )
+
+    def langchain_llm(
+        self,
+        temperature,
+        max_length,
+        top_k,
+        top_p,
+        num_return_sequences,
+        early_stopping,
+    ):
+        llm_pipeline = pipeline(
+            "text-generation",
+            model=self.model,
+            tokenizer=self.tokenizer,
+            return_full_text=True,
+            device_map=device_map,
+            streamer=self.streamer,
+        )
+        llm = HuggingFacePipeline(
+            pipeline=llm_pipeline,
+            model_kwargs={
+                "temperature": temperature,
+                "max_length": max_length,
+                "top_k": top_k,
+                "top_p": top_p,
+                "num_return_sequences": num_return_sequences,
+                "early_stopping": early_stopping,
+            },
+        )
+        return llm
+
     def generate_response(
         self,
         prompt: str,
-        max_length: int = 500,
+        max_length: int = 250,
         temperature: float = 0.1,
         top_k: int = 50,
         top_p: float = 0.9,
@@ -80,9 +128,9 @@ class Model:
                 greater than this value. Default is 0.9.
             num_return_sequences (int): The number of response sequences to generate
                 from the given prompt. Default is 1.
-            early_stopping (bool): Whether or not to stop generating once `early_stopping`
+            early_stopping (bool): Whether or not to stop generating once early_stopping
                 criteria are met. If set to False, the generator will keep generating until it reaches
-                `max_length`. Default is True.
+                max_length. Default is True.
 
         Returns:
             Union[str, List[str]]: A single response string if 'num_return_sequences' is 1,
@@ -124,35 +172,51 @@ class Model:
 def download_hf_model(model_id, save_model_path) -> tuple:
     """Downloads and saves the model and tokenizer based on the configuration files.
 
-    The configuration should specify `HF_TOKEN` and `model_id`.
+    The configuration should specify HF_TOKEN and model_id.
 
     Returns:
         tuple: The tokenizer and model that were downloaded.
 
     Raises:
-        ValueError: If no `model_id` is specified in the configuration.
+        ValueError: If no model_id is specified in the configuration.
     """
     tokenizer = None
     model = None
     hf_token = os.getenv("HF_TOKEN")
 
     if model_id is None:
-        raise ValueError("No `model_id` provided.")
+        raise ValueError("No model_id provided.")
 
     if not os.path.exists(save_model_path):
         os.makedirs(save_model_path, exist_ok=True)
+        if torch_device == "cuda":
+            model = AutoModelForCausalLM.from_pretrained(
+                model_id,
+                load_in_4bit=True,
+                device_map=device_map,
+                cache_dir="models",
+                token=hf_token,
+                bnb_4bit_compute_dtype=torch.float16,
+                # bnb_4bit_quant_type="nf4",
+                # bnb_4bit_use_double_quant=True
+            )
+        else:
+            model = AutoModelForCausalLM.from_pretrained(
+                model_id,
+                # load_in_4bit=True,
+                device_map=device_map,
+                cache_dir="models",
+                token=hf_token,
+                # bnb_4bit_compute_dtype=torch.float16,
+                # bnb_4bit_quant_type="nf4",
+                # bnb_4bit_use_double_quant=True
+            )
 
-        model = AutoModelForCausalLM.from_pretrained(
+        tokenizer = AutoTokenizer.from_pretrained(
             model_id,
-            load_in_4bit=True,
-            device_map="auto",
-            cache_dir="models",
             token=hf_token,
-            bnb_4bit_compute_dtype=torch.float16,
-            # bnb_4bit_quant_type="nf4",
-            # bnb_4bit_use_double_quant=True
+            cache_dir="models",
         )
-        tokenizer = AutoTokenizer.from_pretrained(model_id, token=hf_token)
 
         model.save_pretrained(save_model_path)
         tokenizer.save_pretrained(save_model_path)
@@ -188,15 +252,13 @@ async def response(request_body: GenerationRequest, request: Request) -> dict:
     Raises:
     HTTPException: Raised if the prompt is empty.
     """
+
     if request_body.prompt:
         system_prompt = request.app.conf["system_prompt"]
         prompt_template = request.app.conf["prompt_template"]
         user_input = request_body.prompt
 
-        try:
-            full_prompt = prompt_template.format(system=system_prompt, user=user_input)
-        except:
-            full_prompt = user_input
+        full_prompt = user_input
 
         response = request.app.model.generate_response(
             full_prompt,

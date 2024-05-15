@@ -1,16 +1,11 @@
 ### LLM ###
 save_model_path: "Meta-Llama-3-8B-Instruct"
 model_id: "meta-llama/Meta-Llama-3-8B-Instruct"
-
+streamer: "TextIteratorStreamer"
 system_prompt: "You are a helpful, respectful and friendly assistant. Always answer as helpfully as possible, while being safe. If you don't know the answer to a question, please don't share false information."
 
-# prompt_template: """<|begin_of_text|>\n<|start_header_id|>system<|end_header_id|>{system}
-# <|eot_id|>\n<|start_header_id|>user<|end_header_id|>{user}
-# <|eot_id|>\n<|start_header_id|>assistant<|end_header_id|><|eot_id|>"""
+prompt_template: "The following is a conversation between a human an AI. The AI is helpful, respectful and polite. If the AI does not know the answer to a question, the AI truthfully says the AI does not know. The AI does not answer harmful topics. Also, the AI does not repeat itself. \n\nCurrent conversation:\n{context}\nHuman: {input}\nAI:"
 
-prompt_template: "<|begin_of_text|>\n<|start_system|>{system}<|end_system|>\n<|start_user|>{user}<|end_user|>\n<|start_assistant|>"
-
-temperature: 0
 max_length: 300
 min_length: 50
 temperature: 0.1
