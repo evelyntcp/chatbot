@@ -1,9 +1,19 @@
 # Chatbot with Llama 3
-
 Prototype of a chatbot using Huggingface, FastAPI and Streamlit
 
-- Download model and inference API
-- Customize temperature, top k and top p
+## Features
+- Chat with PDF via retrieval augmented generation. 
+- Supports normal chat with LLM.
+- Can customize simple settings of the LLM such as temperature, top_k and top_p.
+- Able to load local LLM and run on GPU.
+
+## Design Flow
+Streamlit interface takes in pdf file then posts it to /upload-pdfs API endpoint. 
+This endpoint contains a pipeline where it loads the PDF, splits the document by chunking, then uses an embedding model to convert it to embeddings before adding to the vector database.
+
+After the vector database is populated, users can ask questions at the streamlit interface. The streamlit app will post the user's input to another /response-chain endpoint where the pipeline will retrieve similar information and then generate a response.
+
+In the event where there is no PDF uploaded, a normal chat can still take place between the user and chatbot. 
 
 ## Set up environment
 
@@ -14,7 +24,7 @@ source chat/bin/activate
 pip install -r requirements.txt
 ```
 
-Using conda: 
+<!-- Using conda (for multistage docker build)
 
 ```
 conda env create -f conda-env.yaml
@@ -24,7 +34,7 @@ If already environment is already created,
 
 ```
 conda activate chat2
-```
+``` -->
 
 ## Deployment
 
@@ -47,7 +57,7 @@ docker run --rm --gpus all base:latest nvidia-smi
 
 ### Docker App Image
 ```
-docker-compose -f deployment/app-docker-compose.yml up
+docker-compose -f deployment/rag-docker-compose.yml up
 ```
 
 <!-- 
